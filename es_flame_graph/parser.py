@@ -22,6 +22,7 @@ class ThreadInfo:
     interval_ms: float
     thread_name: str
     snapshots: str
+    samples_count: int
     stack_frames: List[str]
 
 
@@ -180,18 +181,20 @@ class HotThreadsParser:
         interval_ms = float(interval_ms)
 
         # Convert to milliseconds based on unit
-        if unit == 'micros':
+        if unit == "micros":
             cpu_time_ms = float(cpu_time) / 1000
         else:  # unit == 'ms'
             cpu_time_ms = float(cpu_time)
 
         # Second line: snapshots
         snapshots = ""
+        samples_count = 0
         if len(lines) > 1:
             snapshots_line = lines[1].strip()
             snapshots_match = self.snapshots_pattern.search(snapshots_line)
             if snapshots_match:
                 snapshots = snapshots_match.group(1) + "/" + snapshots_match.group(2)
+                samples_count = int(snapshots_match.group(1))
 
         # Remaining lines: stack frames
         stack_frames = []
@@ -228,5 +231,6 @@ class HotThreadsParser:
             interval_ms=interval or interval_ms,
             thread_name=thread_name,
             snapshots=snapshots,
+            samples_count=samples_count,
             stack_frames=stack_frames,
         )

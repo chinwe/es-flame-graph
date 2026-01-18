@@ -22,7 +22,9 @@ class FrameNode:
     y: float = 0.0
     width: float = 0.0
     value: float = 0.0
+    samples_count: int = 0
     percentage: float = 0.0
+    cpu_percent: float = 0.0
     color: str = "rgb(255,255,255)"
     start_time: float = 0.0
     end_time: float = 0.0
@@ -91,15 +93,16 @@ class FlameGraphGenerator:
 
     def _merge_threads(self, threads: List) -> dict:
         """
-        Merge threads by node_id and thread_name, accumulate CPU time.
+        Merge threads by node_id and thread_name, accumulate CPU time and samples.
 
         Args:
             threads: List of ThreadInfo objects
 
         Returns:
-            Dict mapping node_id to list of (thread_name, cpu_time_ms, cpu_percent) tuples
+            Dict mapping node_id to list of (thread_name, cpu_time_ms, cpu_percent, samples_count) tuples
         """
         # First, group threads by node_id and thread_name
+        # Store both cpu_time_ms and samples_count
         node_thread_groups = {}
         for thread in threads:
             node_key = thread.node_id
@@ -108,30 +111,37 @@ class FlameGraphGenerator:
 
             thread_name = thread.thread_name
             if thread_name in node_thread_groups[node_key]:
-                node_thread_groups[node_key][thread_name] += thread.cpu_time_ms
+                # Accumulate both CPU time and samples count
+                node_thread_groups[node_key][thread_name][0] += thread.cpu_time_ms
+                node_thread_groups[node_key][thread_name][1] += thread.samples_count
             else:
-                node_thread_groups[node_key][thread_name] = thread.cpu_time_ms
+                node_thread_groups[node_key][thread_name] = [
+                    thread.cpu_time_ms,
+                    thread.samples_count,
+                ]
 
         # Calculate total CPU time for percentage
         total_cpu = sum(t.cpu_time_ms for t in threads)
 
-        # Build result dict: node_id -> list of (thread_name, cpu_time, cpu_percent)
+        # Build result dict: node_id -> list of (thread_name, cpu_time, cpu_percent, samples_count)
         result = {}
         for node_id, thread_dict in node_thread_groups.items():
-            node_total = sum(thread_dict.values())
+            node_total = sum(v[0] for v in thread_dict.values())
+            node_samples = sum(v[1] for v in thread_dict.values())
             thread_list = []
-            for thread_name, cpu_time in thread_dict.items():
+            for thread_name, (cpu_time, samples_count) in thread_dict.items():
                 cpu_percent = (cpu_time / total_cpu * 100) if total_cpu > 0 else 0
-                thread_list.append((thread_name, cpu_time, cpu_percent))
+                thread_list.append((thread_name, cpu_time, cpu_percent, samples_count))
 
             # Sort by CPU time if enabled
             if self.sort_by_cpu:
                 thread_list.sort(key=lambda x: x[1], reverse=True)
 
             result[node_id] = {
-                'threads': thread_list,
-                'node_cpu': node_total,
-                'node_percent': (node_total / total_cpu * 100) if total_cpu > 0 else 0
+                "threads": thread_list,
+                "node_cpu": node_total,
+                "node_samples": node_samples,
+                "node_percent": (node_total / total_cpu * 100) if total_cpu > 0 else 0,
             }
 
         return result
@@ -143,7 +153,7 @@ class FlameGraphGenerator:
         Structure: all (root) -> node_id -> thread_name
 
         Args:
-            merged: Dict mapping node_id to {'threads': [...], 'node_cpu': ..., 'node_percent': ...}
+            merged: Dict mapping node_id to {'threads': [...], 'node_cpu': ..., 'node_samples': ..., 'node_percent': ...}
             total_time: Total CPU time
 
         Returns:
@@ -156,23 +166,21 @@ class FlameGraphGenerator:
         # Create node frames
         for node_id, node_data in merged.items():
             node_frame = FrameNode(
-                name=node_id,
-                depth=1,
-                value=node_data['node_cpu'],
-                parent=root
+                name=node_id, depth=1, value=node_data["node_cpu"], parent=root
             )
-            node_frame.cpu_percent = node_data['node_percent']
+            node_frame.cpu_percent = node_data["node_percent"]
+            node_frame.samples_count = node_data["node_samples"]
             root.children.append(node_frame)
 
             # Create thread frames under each node
-            for thread_name, cpu_time, cpu_percent in node_data['threads']:
+            for thread_name, cpu_time, cpu_percent, samples_count in node_data[
+                "threads"
+            ]:
                 thread_frame = FrameNode(
-                    name=thread_name,
-                    depth=2,
-                    value=cpu_time,
-                    parent=node_frame
+                    name=thread_name, depth=2, value=cpu_time, parent=node_frame
                 )
                 thread_frame.cpu_percent = cpu_percent
+                thread_frame.samples_count = samples_count
                 node_frame.children.append(thread_frame)
 
         return root
@@ -459,7 +467,10 @@ class FlameGraphGenerator:
             )
 
             svg_lines.append("  <g>")
-            samples = int(frame.value)
+            # Use samples_count instead of cpu_time_ms (value)
+            samples = (
+                frame.samples_count if frame.samples_count > 0 else int(frame.value)
+            )
             samples_str = "{:,}".format(samples)
             pct = f"{frame.percentage:.2f}"
             escaped_name = self._escape_xml(frame.name)
@@ -481,7 +492,7 @@ class FlameGraphGenerator:
                     display_name = self._simplify_thread_name(frame.name)
 
                 # Show CPU percent if enabled and frame is wide enough
-                if self.show_cpu_percent and hasattr(frame, 'cpu_percent'):
+                if self.show_cpu_percent and hasattr(frame, "cpu_percent"):
                     cpu_pct_text = f" {frame.cpu_percent:.1f}%"
                     remaining_chars = chars - len(cpu_pct_text)
                     if remaining_chars >= 3:
@@ -541,12 +552,13 @@ class FlameGraphGenerator:
         """
         # Match pattern: elasticsearch[node_id] followed by [...]
         import re
+
         # Match elasticsearch[...] followed by [...]
-        pattern = r'^elasticsearch\[.+?\]\s*(\[.+\])'
+        pattern = r"^elasticsearch\[.+?\]\s*(\[.+\])"
         match = re.match(pattern, thread_name)
         if match:
             # Return the matched [...] part and everything after
-            return thread_name[match.start(1):]
+            return thread_name[match.start(1) :]
         return thread_name
 
     def _get_javascript(self) -> str:

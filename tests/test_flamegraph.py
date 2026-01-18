@@ -39,6 +39,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-1",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["A", "B", "C"],
             ),
             ThreadInfo(
@@ -51,6 +52,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-2",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["A", "B", "C"],
             ),
         ]
@@ -85,6 +87,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-1",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["A", "B", "C"],
             )
         ]
@@ -130,6 +133,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-1",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["LargeFunction"],
             )
         ]
@@ -164,6 +168,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-1",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["SmallFunction"],
             )
         ]
@@ -198,6 +203,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-1",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["FunctionA", "FunctionB", "FunctionC"],
             )
         ]
@@ -229,6 +235,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-1",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["A"],
             )
         ]
@@ -257,6 +264,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 interval_ms=500.0,
                 thread_name="thread-1",
                 snapshots="10/10",
+                samples_count=10,
                 stack_frames=["A"],
             )
         ]
