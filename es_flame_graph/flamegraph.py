@@ -67,6 +67,7 @@ class FlameGraphGenerator:
         self.ypad1 = fontsize * 3
         self.ypad2 = fontsize * 2 + 10
         self.framepad = 1
+        self.current_y = self.ypad1
 
         # Get JavaScript file path
         self.js_file = os.path.join(
@@ -130,7 +131,7 @@ class FlameGraphGenerator:
             node_samples = sum(v[1] for v in thread_dict.values())
             thread_list = []
             for thread_name, (cpu_time, samples_count) in thread_dict.items():
-                cpu_percent = (cpu_time / total_cpu * 100) if total_cpu > 0 else 0
+                cpu_percent = (cpu_time / node_total * 100) if node_total > 0 else 0
                 thread_list.append((thread_name, cpu_time, cpu_percent, samples_count))
 
             # Sort by CPU time if enabled
@@ -141,7 +142,7 @@ class FlameGraphGenerator:
                 "threads": thread_list,
                 "node_cpu": node_total,
                 "node_samples": node_samples,
-                "node_percent": (node_total / total_cpu * 100) if total_cpu > 0 else 0,
+                "node_percent": 100.0,
             }
 
         return result
@@ -169,6 +170,7 @@ class FlameGraphGenerator:
                 name=node_id, depth=1, value=node_data["node_cpu"], parent=root
             )
             node_frame.cpu_percent = node_data["node_percent"]
+            node_frame.percentage = node_data["node_percent"]
             node_frame.samples_count = node_data["node_samples"]
             root.children.append(node_frame)
 
@@ -250,37 +252,63 @@ class FlameGraphGenerator:
         """
         Calculate x, y, width for all frames
 
+        New layout: Each node (depth=1) is displayed horizontally side-by-side.
+        Threads (depth=2) are laid out horizontally within each node.
+
         Args:
             root: Root FrameNode
             total_time: Total CPU time
         """
-        width_per_time = (self.width - 2 * self.xpad) / total_time
+        total_width = self.width - 2 * self.xpad
 
-        def calc_percent(node: FrameNode):
-            node.percentage = (node.value / total_time) * 100
+        def calc_percent(node: FrameNode, parent_value: float):
+            # Each node's percentage is relative to its parent
+            # Node level (depth=1) is always 100%
+            if node.depth == 1:
+                node.percentage = 100.0
+            else:
+                node.percentage = (
+                    (node.value / parent_value) * 100 if parent_value > 0 else 0
+                )
             for child in node.children:
-                calc_percent(child)
+                calc_percent(child, node.value)
 
-        calc_percent(root)
+        calc_percent(root, total_time)
 
-        def set_time_ranges(node: FrameNode, start_time: float) -> float:
-            node.start_time = start_time
+        # Layout nodes (depth=1) - side by side horizontally at bottom
+        # Layout threads (depth=2) - horizontal within each node, above nodes
+        current_x = self.xpad
 
-            if not node.children:
-                node.end_time = start_time + node.value
-                return node.end_time
+        for node in root.children:
+            # Node width is proportional to its CPU time
+            if total_time > 0:
+                node.width = (node.value / total_time) * total_width
+            else:
+                node.width = 0
+            node.x = current_x
+            node.y = self.ypad1 + (self.height + self.framepad)
 
-            # Process children sequentially, each starts where the previous ended
-            current_child_start = start_time
-            for child in node.children:
-                child_end = set_time_ranges(child, current_child_start)
-                current_child_start = child_end
+            current_x += node.width
+            node.end_time = node.x + node.width
 
-            node.end_time = current_child_start
-            return node.end_time
+        # Layout threads above nodes
+        current_x = self.xpad
+        for node in root.children:
+            if node.children:
+                thread_x = node.x
+                for thread in node.children:
+                    thread.x = thread_x
+                    # Thread width is proportional to its CPU time within the node
+                    if node.value > 0:
+                        thread.width = (thread.value / node.value) * node.width
+                    else:
+                        thread.width = 0
+                    thread.y = self.ypad1
+                    thread_x += thread.width
 
-        set_time_ranges(root, 0)
-        self._convert_to_pixels(root, width_per_time)
+            current_x += node.width
+
+        self.current_y = self.ypad1 + 2 * (self.height + self.framepad)
 
     def _calculate_time_ranges(self, node: FrameNode, current_time: float) -> float:
         """
@@ -351,14 +379,13 @@ class FlameGraphGenerator:
         """
         if self.minwidth.endswith("%"):
             min_pct = float(self.minwidth.rstrip("%"))
-            min_time = total_time * min_pct / 100
+            min_width = (self.width - 2 * self.xpad) * min_pct / 100
         else:
-            width_per_time = (self.width - 2 * self.xpad) / total_time
-            min_time = float(self.minwidth) / width_per_time
+            min_width = float(self.minwidth)
 
         filtered = []
         for frame in frames:
-            if (frame.end_time - frame.start_time) >= min_time:
+            if frame.width >= min_width:
                 filtered.append(frame)
 
         return filtered
@@ -374,9 +401,8 @@ class FlameGraphGenerator:
         Returns:
             SVG string
         """
-        # Calculate image height
-        max_depth = max((f.depth for f in frames), default=0)
-        image_height = (max_depth + 1) * self.height + self.ypad1 + self.ypad2
+        # Calculate image height using actual layout position
+        image_height = self.current_y + self.ypad2
 
         # SVG header
         svg_lines = [
@@ -459,15 +485,15 @@ class FlameGraphGenerator:
         svg_lines.append('<g id="frames">')
 
         for frame in frames:
-            y = (
-                image_height
-                - self.ypad2
-                - (frame.depth + 1) * self.height
-                + self.framepad
-            )
+            y = frame.y
 
-            svg_lines.append("  <g>")
-            # Use samples_count instead of cpu_time_ms (value)
+            node_id = ""
+            if frame.depth == 1:
+                node_id = frame.name
+            elif frame.depth == 2 and hasattr(frame, "parent") and frame.parent:
+                node_id = frame.parent.name
+
+            svg_lines.append(f'  <g data-depth="{frame.depth}" data-node="{node_id}">')
             samples = (
                 frame.samples_count if frame.samples_count > 0 else int(frame.value)
             )
