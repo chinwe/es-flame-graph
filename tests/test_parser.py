@@ -26,7 +26,7 @@ class TestHotThreadsParser(unittest.TestCase):
     def test_parse_text(self):
         """Test parsing from text"""
         text = """
-::: {node123}{node_name}{...}{10.0.0.1}{10.0.0.1:9300}{dir}{}
+::: {abc123}{node_name}{hash123}{10.0.0.1}{10.0.0.1:9300}{dir}{attr=value}
    Hot threads at 2026-01-18T08:42:32.186Z, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:
 
     1.0% (5.0ms out of 500ms) cpu usage by thread 'test-thread'
@@ -41,7 +41,7 @@ class TestHotThreadsParser(unittest.TestCase):
     def test_thread_info_structure(self):
         """Test thread info structure"""
         text = """
-::: {node123}{node_name}{...}{10.0.0.1}{10.0.0.1:9300}{dir}{}
+::: {abc123}{node_name}{hash123}{10.0.0.1}{10.0.0.1:9300}{dir}{attr=value}
    Hot threads at 2026-01-18T08:42:32.186Z, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:
 
     1.0% (5.0ms out of 500ms) cpu usage by thread 'test-thread'
@@ -53,7 +53,7 @@ class TestHotThreadsParser(unittest.TestCase):
         self.assertEqual(len(data.threads), 1)
 
         thread = data.threads[0]
-        self.assertEqual(thread.node_id, "node123")
+        self.assertEqual(thread.node_id, "abc123")
         self.assertEqual(thread.node_name, "node_name")
         self.assertEqual(thread.thread_name, "test-thread")
         self.assertEqual(thread.cpu_percent, 1.0)
@@ -68,16 +68,30 @@ class TestHotThreadsParser(unittest.TestCase):
         cpu_match = self.parser.cpu_usage_pattern.match(line.strip())
 
         self.assertIsNotNone(cpu_match)
-        cpu_percent, cpu_time, interval, thread_name = cpu_match.groups()
+        cpu_percent, cpu_time, unit, interval, thread_name = cpu_match.groups()
         self.assertEqual(float(cpu_percent), 1.0)
         self.assertEqual(float(cpu_time), 5.0)
+        self.assertEqual(unit, "ms")
+        self.assertEqual(float(interval), 500.0)
+        self.assertEqual(thread_name, "test-thread")
+
+    def test_cpu_info_extraction_micros(self):
+        """Test CPU info line parsing with microseconds"""
+        line = "0.0% (141.2micros out of 500ms) cpu usage by thread 'test-thread'"
+        cpu_match = self.parser.cpu_usage_pattern.match(line.strip())
+
+        self.assertIsNotNone(cpu_match)
+        cpu_percent, cpu_time, unit, interval, thread_name = cpu_match.groups()
+        self.assertEqual(float(cpu_percent), 0.0)
+        self.assertEqual(float(cpu_time), 141.2)
+        self.assertEqual(unit, "micros")
         self.assertEqual(float(interval), 500.0)
         self.assertEqual(thread_name, "test-thread")
 
     def test_stack_frame_reversal(self):
         """Test that stack frames are reversed (root first)"""
         text = """
-::: {node123}{node_name}{...}{10.0.0.1}{10.0.0.1:9300}{dir}{}
+::: {abc123}{node_name}{hash123}{10.0.0.1}{10.0.0.1:9300}{dir}{attr=value}
    Hot threads at 2026-01-18T08:42:32.186Z, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:
 
     1.0% (5.0ms out of 500ms) cpu usage by thread 'test-thread'
@@ -94,7 +108,7 @@ class TestHotThreadsParser(unittest.TestCase):
     def test_total_cpu_time_calculation(self):
         """Test total CPU time calculation"""
         text = """
-::: {node123}{node_name}{...}{10.0.0.1}{10.0.0.1:9300}{dir}{}
+::: {abc123}{node_name}{hash123}{10.0.0.1}{10.0.0.1:9300}{dir}{attr=value}
    Hot threads at 2026-01-18T08:42:32.186Z, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:
 
     1.0% (5.0ms out of 500ms) cpu usage by thread 'test-thread-1'
@@ -111,7 +125,7 @@ class TestHotThreadsParser(unittest.TestCase):
     def test_multiple_threads(self):
         """Test parsing multiple threads"""
         text = """
-::: {node123}{node_name}{...}{10.0.0.1}{10.0.0.1:9300}{dir}{}
+::: {abc123}{node_name}{hash123}{10.0.0.1}{10.0.0.1:9300}{dir}{attr=value}
    Hot threads at 2026-01-18T08:42:32.186Z, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:
 
     1.0% (5.0ms out of 500ms) cpu usage by thread 'thread-1'
@@ -128,7 +142,7 @@ class TestHotThreadsParser(unittest.TestCase):
     def test_empty_data(self):
         """Test handling of empty data"""
         text = """
-::: {node123}{node_name}{...}{10.0.0.1}{10.0.0.1:9300}{dir}{}
+::: {abc123}{node_name}{hash123}{10.0.0.1}{10.0.0.1:9300}{dir}{attr=value}
    Hot threads at 2026-01-18T08:42:32.186Z, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:
 
 """

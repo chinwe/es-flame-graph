@@ -35,9 +35,9 @@ class FlameGraphGenerator:
 
     def __init__(
         self,
-        width: int = 1200,
-        height: int = 16,
-        fontsize: int = 12,
+        width: int = 1920,
+        height: int = 18,
+        fontsize: int = 14,
         xpad: int = 10,
         ypad: int = 50,
         minwidth: str = "0.1",
@@ -45,6 +45,8 @@ class FlameGraphGenerator:
         color_theme: str = "hot",
         nametype: str = "Function:",
         countname: str = "samples",
+        sort_by_cpu: bool = False,
+        show_cpu_percent: bool = False,
     ):
         self.width = width
         self.height = height
@@ -57,6 +59,8 @@ class FlameGraphGenerator:
         self.color_theme = color_theme
         self.nametype = nametype
         self.countname = countname
+        self.sort_by_cpu = sort_by_cpu
+        self.show_cpu_percent = show_cpu_percent
 
         self.ypad1 = fontsize * 3
         self.ypad2 = fontsize * 2 + 10
@@ -85,37 +89,61 @@ class FlameGraphGenerator:
         frames = self._filter_by_minwidth(frames, data.total_cpu_time)
         return self._render_svg(frames, data.total_cpu_time)
 
-    def _merge_threads(self, threads: List) -> Dict[str, float]:
+    def _merge_threads(self, threads: List) -> dict:
         """
-        Merge threads with same stacks, accumulate CPU time
-
-        For flame graph, we use thread name as the function name
-        instead of the full call stack to keep the display simple.
+        Merge threads by node_id and thread_name, accumulate CPU time.
 
         Args:
             threads: List of ThreadInfo objects
 
         Returns:
-            Dict mapping thread_name to total_cpu_time
+            Dict mapping node_id to list of (thread_name, cpu_time_ms, cpu_percent) tuples
         """
-        merged = {}
+        # First, group threads by node_id and thread_name
+        node_thread_groups = {}
         for thread in threads:
+            node_key = thread.node_id
+            if node_key not in node_thread_groups:
+                node_thread_groups[node_key] = {}
+
             thread_name = thread.thread_name
-            if thread_name in merged:
-                merged[thread_name] += thread.cpu_time_ms
+            if thread_name in node_thread_groups[node_key]:
+                node_thread_groups[node_key][thread_name] += thread.cpu_time_ms
             else:
-                merged[thread_name] = thread.cpu_time_ms
-        return merged
+                node_thread_groups[node_key][thread_name] = thread.cpu_time_ms
 
-    def _build_tree(self, merged: Dict[str, float], total_time: float) -> FrameNode:
+        # Calculate total CPU time for percentage
+        total_cpu = sum(t.cpu_time_ms for t in threads)
+
+        # Build result dict: node_id -> list of (thread_name, cpu_time, cpu_percent)
+        result = {}
+        for node_id, thread_dict in node_thread_groups.items():
+            node_total = sum(thread_dict.values())
+            thread_list = []
+            for thread_name, cpu_time in thread_dict.items():
+                cpu_percent = (cpu_time / total_cpu * 100) if total_cpu > 0 else 0
+                thread_list.append((thread_name, cpu_time, cpu_percent))
+
+            # Sort by CPU time if enabled
+            if self.sort_by_cpu:
+                thread_list.sort(key=lambda x: x[1], reverse=True)
+
+            result[node_id] = {
+                'threads': thread_list,
+                'node_cpu': node_total,
+                'node_percent': (node_total / total_cpu * 100) if total_cpu > 0 else 0
+            }
+
+        return result
+
+    def _build_tree(self, merged: dict, total_time: float) -> FrameNode:
         """
-        Build call tree from merged thread data
+        Build call tree with node hierarchy.
 
-        For per-node flame graphs, we create a flat list of threads.
-        Each thread becomes a child of the root with its thread name and CPU time.
+        Structure: all (root) -> node_id -> thread_name
 
         Args:
-            merged: Dict mapping thread_name to cpu_time
+            merged: Dict mapping node_id to {'threads': [...], 'node_cpu': ..., 'node_percent': ...}
             total_time: Total CPU time
 
         Returns:
@@ -125,9 +153,27 @@ class FlameGraphGenerator:
             name="all", depth=0, value=total_time, color="rgb(255,255,255)"
         )
 
-        for thread_name, cpu_time in merged.items():
-            child = FrameNode(name=thread_name, depth=1, value=cpu_time, parent=root)
-            root.children.append(child)
+        # Create node frames
+        for node_id, node_data in merged.items():
+            node_frame = FrameNode(
+                name=node_id,
+                depth=1,
+                value=node_data['node_cpu'],
+                parent=root
+            )
+            node_frame.cpu_percent = node_data['node_percent']
+            root.children.append(node_frame)
+
+            # Create thread frames under each node
+            for thread_name, cpu_time, cpu_percent in node_data['threads']:
+                thread_frame = FrameNode(
+                    name=thread_name,
+                    depth=2,
+                    value=cpu_time,
+                    parent=node_frame
+                )
+                thread_frame.cpu_percent = cpu_percent
+                node_frame.children.append(thread_frame)
 
         return root
 
@@ -139,10 +185,58 @@ class FlameGraphGenerator:
             node: Root FrameNode
         """
         if node.name != "all":
-            node.color = get_color(node.name, self.color_theme)
+            # Depth 1 = node level, use distinct color
+            if node.depth == 1:
+                # Node frames use a consistent blue-gray color
+                node.color = "rgb(100, 120, 160)"
+            # Depth 2 = thread level, use theme colors
+            elif node.depth == 2:
+                # Use cpu-based color theme if enabled
+                if self.color_theme == "cpu":
+                    node.color = self._get_cpu_color(node.cpu_percent)
+                else:
+                    node.color = get_color(node.name, self.color_theme)
+            else:
+                # Other depths use theme colors
+                node.color = get_color(node.name, self.color_theme)
 
         for child in node.children:
             self._assign_colors(child)
+
+    def _get_cpu_color(self, cpu_percent: float) -> str:
+        """
+        Generate color based on CPU usage percentage.
+        Higher CPU = warmer colors (red/orange), lower CPU = cooler colors (blue/green).
+
+        Args:
+            cpu_percent: CPU percentage (0-100)
+
+        Returns:
+            RGB color string
+        """
+        # Normalize to 0-1 range
+        ratio = min(cpu_percent / 100, 1.0)
+
+        if ratio > 0.5:
+            # High CPU: Orange to Red
+            local_ratio = (ratio - 0.5) / 0.5
+            r = 255
+            g = int(165 * (1 - local_ratio))
+            b = 0
+        elif ratio > 0.2:
+            # Medium CPU: Yellow to Orange
+            local_ratio = (ratio - 0.2) / 0.3
+            r = int(255 * (0.5 + 0.5 * local_ratio))
+            g = int(255 * (1 - 0.4 * local_ratio))
+            b = 0
+        else:
+            # Low CPU: Green to Yellow
+            local_ratio = ratio / 0.2
+            r = int(255 * local_ratio)
+            g = 255
+            b = int(100 * (1 - local_ratio))
+
+        return f"rgb({r},{g},{b})"
 
     def _calculate_layout(self, root: FrameNode, total_time: float):
         """
@@ -168,14 +262,14 @@ class FlameGraphGenerator:
                 node.end_time = start_time + node.value
                 return node.end_time
 
-            max_child_end = start_time
+            # Process children sequentially, each starts where the previous ended
+            current_child_start = start_time
             for child in node.children:
-                child_end = set_time_ranges(child, start_time)
-                if child_end > max_child_end:
-                    max_child_end = child_end
+                child_end = set_time_ranges(child, current_child_start)
+                current_child_start = child_end
 
-            node.end_time = max_child_end
-            return max_child_end
+            node.end_time = current_child_start
+            return node.end_time
 
         set_time_ranges(root, 0)
         self._convert_to_pixels(root, width_per_time)
@@ -381,9 +475,27 @@ class FlameGraphGenerator:
 
             chars = int(frame.width / (self.fontsize * self.fontwidth))
             if chars >= 3:
-                text = frame.name[:chars]
-                if chars < len(frame.name):
-                    text = frame.name[: chars - 2] + ".."
+                # For thread level (depth=2), simplify the name
+                display_name = frame.name
+                if frame.depth == 2:
+                    display_name = self._simplify_thread_name(frame.name)
+
+                # Show CPU percent if enabled and frame is wide enough
+                if self.show_cpu_percent and hasattr(frame, 'cpu_percent'):
+                    cpu_pct_text = f" {frame.cpu_percent:.1f}%"
+                    remaining_chars = chars - len(cpu_pct_text)
+                    if remaining_chars >= 3:
+                        text = display_name[:remaining_chars]
+                        if remaining_chars < len(display_name):
+                            text = display_name[: remaining_chars - 2] + ".."
+                        text = text + cpu_pct_text
+                    else:
+                        # Not enough space for both, show CPU % only
+                        text = cpu_pct_text.strip()
+                else:
+                    text = display_name[:chars]
+                    if chars < len(display_name):
+                        text = display_name[: chars - 2] + ".."
 
                 svg_lines.append(
                     f'    <text x="{frame.x + 3}" y="{y + self.fontsize}">'
@@ -412,6 +524,30 @@ class FlameGraphGenerator:
         text = text.replace(">", "&gt;")
         text = text.replace('"', "&quot;")
         return text
+
+    def _simplify_thread_name(self, thread_name: str) -> str:
+        """
+        Simplify thread name by removing elasticsearch[node_id] prefix.
+
+        Example:
+        - elasticsearch[abc123][management][T#5] -> [management][T#5]
+        - coral-orchestrator-170 -> coral-orchestrator-170 (no change)
+
+        Args:
+            thread_name: Original thread name
+
+        Returns:
+            Simplified thread name
+        """
+        # Match pattern: elasticsearch[node_id] followed by [...]
+        import re
+        # Match elasticsearch[...] followed by [...]
+        pattern = r'^elasticsearch\[.+?\]\s*(\[.+\])'
+        match = re.match(pattern, thread_name)
+        if match:
+            # Return the matched [...] part and everything after
+            return thread_name[match.start(1):]
+        return thread_name
 
     def _get_javascript(self) -> str:
         """

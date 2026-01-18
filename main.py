@@ -19,7 +19,7 @@ def main():
 Examples:
   %(prog)s -i hot_threads.txt -o flamegraph.svg
   %(prog)s -i hot_threads.txt --title "Production Cluster"
-  %(prog)s -i hot_threads.txt --width 1600 --minwidth 0.5%
+  %(prog)s -i hot_threads.txt --width 1600 --minwidth 0.5%%
         """,
     )
 
@@ -41,11 +41,11 @@ Examples:
     )
 
     parser.add_argument(
-        "--width", type=int, default=1200, help="SVG width in pixels (default: 1200)"
+        "--width", type=int, default=1920, help="SVG width in pixels (default: 1920)"
     )
 
     parser.add_argument(
-        "--height", type=int, default=16, help="Frame height in pixels (default: 16)"
+        "--height", type=int, default=18, help="Frame height in pixels (default: 18)"
     )
 
     parser.add_argument(
@@ -72,8 +72,37 @@ Examples:
             "purple",
             "aqua",
             "orange",
+            "cpu",
         ],
-        help="Color theme (default: hot)",
+        help="Color theme (default: hot). 'cpu' theme colors by CPU usage (red=high, green=low)",
+    )
+
+    parser.add_argument(
+        "--sort-by-cpu",
+        action="store_true",
+        default=True,
+        help="Sort threads by CPU usage (highest first) (default: enabled)",
+    )
+
+    parser.add_argument(
+        "--no-sort-by-cpu",
+        action="store_false",
+        dest="sort_by_cpu",
+        help="Disable CPU-based sorting",
+    )
+
+    parser.add_argument(
+        "--show-cpu-percent",
+        action="store_true",
+        default=True,
+        help="Show CPU percentage in flame graph labels (default: enabled)",
+    )
+
+    parser.add_argument(
+        "--no-show-cpu-percent",
+        action="store_false",
+        dest="show_cpu_percent",
+        help="Disable CPU percentage display in labels",
     )
 
     parser.add_argument(
@@ -150,6 +179,8 @@ Examples:
                 minwidth=args.minwidth,
                 title=f"{args.title} - {node_name}",
                 color_theme=args.color,
+                sort_by_cpu=args.sort_by_cpu,
+                show_cpu_percent=args.show_cpu_percent,
             )
 
             try:
@@ -175,6 +206,8 @@ Examples:
             minwidth=args.minwidth,
             title=args.title,
             color_theme=args.color,
+            sort_by_cpu=args.sort_by_cpu,
+            show_cpu_percent=args.show_cpu_percent,
         )
 
         try:

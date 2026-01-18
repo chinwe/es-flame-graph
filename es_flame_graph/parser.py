@@ -53,8 +53,9 @@ class HotThreadsParser:
 
         # Pattern for CPU usage line
         # Example: 0.4% (2.2ms out of 500ms) cpu usage by thread 'thread-name'
+        #          0.0% (141.2micros out of 500ms) cpu usage by thread 'thread-name'
         self.cpu_usage_pattern = re.compile(
-            r"([\d.]+)%\s+\(([\d.]+)ms out of (\d+)ms\)\s+cpu usage by thread \'([^\']+)\'"
+            r"([\d.]+)%\s+\(([\d.]+)(micros|ms)\s+out of (\d+)ms\)\s+cpu usage by thread \'([^\']+)\'"
         )
 
         # Pattern for snapshots line
@@ -174,10 +175,15 @@ class HotThreadsParser:
         if not cpu_match:
             return None
 
-        cpu_percent, cpu_time_ms, interval_ms, thread_name = cpu_match.groups()
+        cpu_percent, cpu_time, unit, interval_ms, thread_name = cpu_match.groups()
         cpu_percent = float(cpu_percent)
-        cpu_time_ms = float(cpu_time_ms)
         interval_ms = float(interval_ms)
+
+        # Convert to milliseconds based on unit
+        if unit == 'micros':
+            cpu_time_ms = float(cpu_time) / 1000
+        else:  # unit == 'ms'
+            cpu_time_ms = float(cpu_time)
 
         # Second line: snapshots
         snapshots = ""

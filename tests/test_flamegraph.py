@@ -15,12 +15,12 @@ class TestFlameGraphGenerator(unittest.TestCase):
 
     def setUp(self):
         self.parser = HotThreadsParser()
-        self.generator = FlameGraphGenerator(width=1200, height=16)
+        self.generator = FlameGraphGenerator(width=1920, height=18)
 
     def test_initialization(self):
         """Test FlameGraphGenerator initialization"""
-        self.assertEqual(self.generator.width, 1200)
-        self.assertEqual(self.generator.height, 16)
+        self.assertEqual(self.generator.width, 1920)
+        self.assertEqual(self.generator.height, 18)
         self.assertEqual(self.generator.title, "Elasticsearch Hot Threads")
         self.assertEqual(self.generator.color_theme, "hot")
 
@@ -30,7 +30,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
 
         threads = [
             ThreadInfo(
-                node_id="node1",
+                node_id="abc123",
                 node_name="node1",
                 node_ip="10.0.0.1",
                 timestamp="2026-01-18T08:42:32Z",
@@ -42,7 +42,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
                 stack_frames=["A", "B", "C"],
             ),
             ThreadInfo(
-                node_id="node2",
+                node_id="def456",
                 node_name="node2",
                 node_ip="10.0.0.2",
                 timestamp="2026-01-18T08:42:32Z",
@@ -57,9 +57,18 @@ class TestFlameGraphGenerator(unittest.TestCase):
 
         merged = self.generator._merge_threads(threads)
 
-        self.assertEqual(len(merged), 1)
-        self.assertIn("A;B;C", merged)
-        self.assertEqual(merged["A;B;C"], 15.0)
+        # Now returns dict mapping node_id to thread data
+        self.assertEqual(len(merged), 2)
+        # Check node abc123
+        self.assertIn("abc123", merged)
+        self.assertEqual(merged["abc123"]["node_cpu"], 5.0)
+        self.assertEqual(len(merged["abc123"]["threads"]), 1)
+        self.assertEqual(merged["abc123"]["threads"][0][0], "thread-1")
+        # Check node def456
+        self.assertIn("def456", merged)
+        self.assertEqual(merged["def456"]["node_cpu"], 10.0)
+        self.assertEqual(len(merged["def456"]["threads"]), 1)
+        self.assertEqual(merged["def456"]["threads"][0][0], "thread-2")
 
     def test_build_tree(self):
         """Test building tree from merged data"""
@@ -67,7 +76,7 @@ class TestFlameGraphGenerator(unittest.TestCase):
 
         threads = [
             ThreadInfo(
-                node_id="node1",
+                node_id="abc123",
                 node_name="node1",
                 node_ip="10.0.0.1",
                 timestamp="2026-01-18T08:42:32Z",
@@ -90,8 +99,15 @@ class TestFlameGraphGenerator(unittest.TestCase):
         self.assertEqual(root.name, "all")
         self.assertEqual(root.value, 10.0)
         self.assertEqual(len(root.children), 1)
-        self.assertEqual(root.children[0].name, "A")
+        # First level is node
+        self.assertEqual(root.children[0].name, "abc123")
+        self.assertEqual(root.children[0].depth, 1)
         self.assertEqual(root.children[0].value, 10.0)
+        # Second level is thread
+        self.assertEqual(len(root.children[0].children), 1)
+        self.assertEqual(root.children[0].children[0].name, "thread-1")
+        self.assertEqual(root.children[0].children[0].depth, 2)
+        self.assertEqual(root.children[0].children[0].value, 10.0)
 
     def test_escape_xml(self):
         """Test XML character escaping"""
