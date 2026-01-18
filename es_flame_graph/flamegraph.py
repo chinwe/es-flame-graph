@@ -451,7 +451,7 @@ class FlameGraphGenerator:
         svg_lines.append(
             "  #frames > *:hover { stroke: black; stroke-width: 0.5; cursor: pointer; }"
         )
-        svg_lines.append("  .hide { display: none; }")
+        svg_lines.append("  .hide { visibility: hidden; pointer-events: none; }")
         svg_lines.append("  .parent { opacity: 0.5; }")
         svg_lines.append("</style>")
 

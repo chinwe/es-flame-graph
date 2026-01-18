@@ -38,3 +38,9 @@ Thumbs.db
 # Output
 examples/
 *.svg
+
+# Claude
+.claude/
+
+# Settings
+settings.local.json

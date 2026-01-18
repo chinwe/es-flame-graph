@@ -1,6 +1,7 @@
 <![CDATA[
     "use strict";
     var details, searchbtn, ignorecasebtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+
     function init(evt) {
         details = document.getElementById("details").firstChild;
         searchbtn = document.getElementById("search");
@@ -20,47 +21,40 @@
         if (params.s) search(params.s);
     }
 
+    // ========== 点击事件处理 ==========
     window.addEventListener("click", function(e) {
         var target = find_group(e.target);
+
+        // Reset Zoom 按钮
+        if (e.target.id == "unzoom") {
+            resetView();
+            return;
+        }
+
+        // Search 按钮
+        if (e.target.id == "search") {
+            search_prompt();
+            return;
+        }
+
+        // Ignore Case 按钮
+        if (e.target.id == "ignorecase") {
+            toggle_ignorecase();
+            return;
+        }
+
+        // 火焰图元素点击
         if (target) {
-            var targetDepth = parseInt(target.getAttribute("data-depth"));
-            var targetNode = target.getAttribute("data-node");
+            var depth = parseInt(target.getAttribute("data-depth"));
 
-            if (targetDepth === 1) {
-                // 点击 Node 层：隐藏其他 Node，显示对应线程
-                if (targetNode) {
-                    zoomToNode(target);
-                } else {
-                    unzoom(true);
-                }
+            // 点击 Node 层（depth=1）：缩放到该 Node
+            if (depth === 1) {
+                zoomToNode(target);
             }
-            // 点击线程层（depth >= 2）：不做处理
-            else if (target.classList.contains("parent")) {
-                unzoom(true);
-            }
-
-            if (!document.querySelector('.parent')) {
-                var params = get_params();
-                if (params.x) delete params.x;
-                if (params.y) delete params.y;
-                history.replaceState(null, null, parse_params(params));
-                unzoombtn.classList.add("hide");
+            // 点击线程层（depth>=2）：不做处理
+            else if (depth >= 2) {
                 return;
             }
-
-            var el = target.querySelector("rect");
-            if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
-                var params = get_params();
-                params.x = el.attributes._orig_x.value;
-                params.y = el.attributes.y.value;
-                history.replaceState(null, null, parse_params(params));
-            }
-        } else if (e.target.id == "unzoom") {
-            clearzoom();
-        } else if (e.target.id == "search") {
-            search_prompt();
-        } else if (e.target.id == "ignorecase") {
-            toggle_ignorecase();
         }
     }, false);
 
@@ -74,7 +68,7 @@
         if (target) details.nodeValue = ' ';
     }, false);
 
-     window.addEventListener("keydown", function(e) {
+    window.addEventListener("keydown", function(e) {
         if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
             e.preventDefault();
             search_prompt();
@@ -84,6 +78,7 @@
         }
     }, false);
 
+    // ========== 工具函数 ==========
     function get_params() {
         var params = {};
         var paramsarr = window.location.search.substr(1).split('&');
@@ -106,8 +101,7 @@
     }
 
     function find_child(node, selector) {
-        var children = node.querySelectorAll(selector);
-        if (children.length) return children[0];
+        return node.querySelector(selector);
     }
 
     function find_group(node) {
@@ -122,9 +116,180 @@
         return text;
     }
 
+    // ========== 缩放相关函数 ==========
+    function zoom_reset(e) {
+        if (e.attributes) {
+            var x = e.getAttribute("_orig_x");
+            if (x !== null) e.setAttribute("x", x);
+            var w = e.getAttribute("_orig_width");
+            if (w !== null) e.setAttribute("width", w);
+        }
+        if (e.childNodes) {
+            for (var i = 0, c = e.childNodes; i < c.length; i++) {
+                var child = c[i];
+                if (child && child.nodeType === 1) {
+                    zoom_reset(child);
+                }
+            }
+        }
+    }
+
+    function zoom_child(e, x, ratio) {
+        if (!e) return;
+        var tagName = e.tagName;
+        if (tagName === "rect" || tagName === "text") {
+            var orig_x = e.getAttribute("x");
+            var orig_width = e.getAttribute("width");
+            if (orig_x !== null) {
+                if (!e.hasAttribute("_orig_x")) e.setAttribute("_orig_x", orig_x);
+                e.setAttribute("x", (parseFloat(orig_x) - x - 10) * ratio + 10);
+                if (tagName === "text") {
+                    var rect = find_child(e.parentNode, "rect[x]");
+                    if (rect) e.setAttribute("x", parseFloat(rect.getAttribute("x")) + 3);
+                }
+            }
+            if (orig_width !== null) {
+                if (!e.hasAttribute("_orig_width")) e.setAttribute("_orig_width", orig_width);
+                e.setAttribute("width", parseFloat(orig_width) * ratio);
+            }
+        }
+        if (e.childNodes) {
+            for (var i = 0, c = e.childNodes; i < c.length; i++) {
+                var child = c[i];
+                if (child && child.nodeType === 1) {
+                    zoom_child(child, x - 10, ratio);
+                }
+            }
+        }
+    }
+
+    function zoom_parent(e) {
+        if (!e) return;
+        var tagName = e.tagName;
+        if (tagName === "rect" || tagName === "text") {
+            var orig_x = e.getAttribute("x");
+            var orig_width = e.getAttribute("width");
+            if (orig_x !== null) {
+                if (!e.hasAttribute("_orig_x")) e.setAttribute("_orig_x", orig_x);
+                e.setAttribute("x", 10);
+            }
+            if (orig_width !== null) {
+                if (!e.hasAttribute("_orig_width")) e.setAttribute("_orig_width", orig_width);
+                e.setAttribute("width", parseInt(svg.getAttribute("width")) - 20);
+            }
+        }
+        if (e.childNodes) {
+            for (var i = 0, c = e.childNodes; i < c.length; i++) {
+                var child = c[i];
+                if (child && child.nodeType === 1) {
+                    zoom_parent(child);
+                }
+            }
+        }
+    }
+
+    // 点击 Node 层：隐藏其他 Node，显示该 Node 的线程
+    function zoomToNode(node) {
+        var targetNode = node.getAttribute("data-node");
+        unzoombtn.classList.remove("hide");
+
+        // 获取目标 Node 的位置和宽度
+        var targetRect = find_child(node, "rect");
+        if (!targetRect) return;
+
+        var nodeX = parseFloat(targetRect.getAttribute("x"));
+        var nodeWidth = parseFloat(targetRect.getAttribute("width"));
+
+        // 计算缩放比例
+        var totalWidth = parseFloat(svg.getAttribute("width")) - 20;
+        var ratio = totalWidth / nodeWidth;
+
+        var el = document.getElementById("frames").children;
+        for (var i = 0; i < el.length; i++) {
+            var e = el[i];
+            var depth = parseInt(e.getAttribute("data-depth"));
+            var elNode = e.getAttribute("data-node");
+
+            if (depth === 1) {
+                // Node 层：隐藏其他 Node，当前 Node 标记为 parent
+                if (elNode === targetNode) {
+                    e.classList.add("parent");
+                    zoom_parent(e);
+                    update_text(e);
+                } else {
+                    e.classList.add("hide");
+                }
+            } else if (depth === 2) {
+                // 线程层：只显示当前 Node 的线程
+                if (elNode === targetNode) {
+                    e.classList.remove("hide");
+                    zoom_child(e, nodeX, ratio);
+                    update_text(e);
+                } else {
+                    e.classList.add("hide");
+                }
+            } else {
+                // 其他层：隐藏
+                e.classList.add("hide");
+            }
+        }
+        search();
+    }
+
+    function zoom(node) {
+        var rect = find_child(node, "rect");
+        var width = parseFloat(rect.getAttribute("width"));
+        var xmin = parseFloat(rect.getAttribute("x"));
+        var xmax = parseFloat(xmin + width);
+        var ratio = (parseFloat(svg.getAttribute("width")) - 20) / width;
+        var fudge = 0.0001;
+
+        unzoombtn.classList.remove("hide");
+
+        var el = document.getElementById("frames").children;
+        for (var i = 0; i < el.length; i++) {
+            var e = el[i];
+            var a = find_child(e, "rect").attributes;
+            var ex = parseFloat(a.x.value);
+            var ew = parseFloat(a.width.value);
+
+            if (ex < xmin || ex + fudge >= xmax) {
+                e.classList.add("hide");
+            } else {
+                zoom_child(e, xmin, ratio);
+                update_text(e);
+            }
+        }
+        search();
+    }
+
+    // 恢复初始状态
+    function resetView() {
+        unzoombtn.classList.add("hide");
+        var el = document.getElementById("frames").children;
+        for (var i = 0; i < el.length; i++) {
+            el[i].classList.remove("parent");
+            el[i].classList.remove("hide");
+            zoom_reset(el[i]);
+            update_text(el[i]);
+        }
+        search();
+
+        // 清除 URL 参数
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+
+    // ========== 文本更新 ==========
     function update_text(e) {
         var r = find_child(e, "rect");
         var t = find_child(e, "text");
+
+        // 如果没有 text 元素，直接返回
+        if (!t || !r) return;
+
         var w = parseFloat(r.getAttribute("width")) - 3;
         var txt = g_to_text(e).replace(/\([^(]*\)$/, "");
         t.setAttribute("x", parseFloat(r.getAttribute("x")) + 3);
@@ -148,150 +313,7 @@
         t.textContent = "";
     }
 
-    function zoom_reset(e) {
-        if (e.attributes != undefined) {
-            var x = e.getAttribute("_orig_x");
-            if (x !== null) e.setAttribute("x", x);
-            var w = e.getAttribute("_orig_width");
-            if (w !== null) e.setAttribute("width", w);
-        }
-        if (e.childNodes == undefined) return;
-        for (var i = 0, c = e.childNodes; i < c.length; i++) {
-            zoom_reset(c[i]);
-        }
-    }
-
-    function zoom_child(e, x, ratio) {
-        if (e.attributes != undefined) {
-            if (e.getAttribute("x") != undefined) {
-                var orig_x = e.getAttribute("x");
-                if (!e.hasAttribute("_orig_x")) e.setAttribute("_orig_x", orig_x);
-                e.setAttribute("x", (parseFloat(orig_x) - x - 10) * ratio + 10);
-                if (e.tagName == "text") {
-                    var rect = find_child(e.parentNode, "rect[x]");
-                    if (rect) e.setAttribute("x", parseFloat(rect.getAttribute("x")) + 3);
-                }
-            }
-            if (e.getAttribute("width") != undefined) {
-                var orig_width = e.getAttribute("width");
-                if (!e.hasAttribute("_orig_width")) e.setAttribute("_orig_width", orig_width);
-                e.setAttribute("width", parseFloat(orig_width) * ratio);
-            }
-        }
-
-        if (e.childNodes == undefined) return;
-        for (var i = 0, c = e.childNodes; i < c.length; i++) {
-            zoom_child(c[i], x - 10, ratio);
-        }
-    }
-
-    function zoom_parent(e) {
-        if (e.attributes) {
-            if (e.getAttribute("x") != undefined) {
-                var orig_x = e.getAttribute("x");
-                if (!e.hasAttribute("_orig_x")) e.setAttribute("_orig_x", orig_x);
-                e.setAttribute("x", 10);
-            }
-            if (e.getAttribute("width") != undefined) {
-                var orig_width = e.getAttribute("width");
-                if (!e.hasAttribute("_orig_width")) e.setAttribute("_orig_width", orig_width);
-                e.setAttribute("width", parseInt(svg.getAttribute("width")) - 20);
-            }
-        }
-        if (e.childNodes == undefined) return;
-        for (var i = 0, c = e.childNodes; i < c.length; i++) {
-            zoom_parent(c[i]);
-        }
-    }
-
-    function zoomToNode(node) {
-        // 点击 Node 层：隐藏其他 Node，显示该 Node 对应的线程
-        var targetNode = node.getAttribute("data-node");
-        unzoombtn.classList.remove("hide");
-
-        var el = document.getElementById("frames").children;
-        for (var i = 0; i < el.length; i++) {
-            var e = el[i];
-            var depth = parseInt(e.getAttribute("data-depth"));
-            var elNode = e.getAttribute("data-node");
-
-            if (depth === 1) {
-                // Node 层：隐藏其他 Node，标记当前 Node 为 parent
-                if (elNode === targetNode) {
-                    e.classList.add("parent");
-                    zoom_parent(e);
-                    update_text(e);
-                } else {
-                    e.classList.add("hide");
-                }
-            } else if (depth === 2) {
-                // 线程层：只显示属于当前 Node 的线程
-                if (elNode === targetNode) {
-                    e.classList.remove("hide");
-                    update_text(e);
-                } else {
-                    e.classList.add("hide");
-                }
-            } else {
-                // 其他层（函数调用栈）：隐藏
-                e.classList.add("hide");
-            }
-        }
-        search();
-    }
-
-    function zoom(node) {
-        var rect = find_child(node, "rect");
-        var width = parseFloat(rect.getAttribute("width"));
-        var xmin = parseFloat(rect.getAttribute("x"));
-        var xmax = parseFloat(xmin + width);
-        var ymin = parseFloat(rect.getAttribute("y"));
-        var targetDepth = parseInt(node.getAttribute("data-depth"));
-        var targetNode = node.getAttribute("data-node");
-        var ratio = (parseFloat(svg.getAttribute("width")) - 20) / width;
-        var fudge = 0.0001;
-
-        unzoombtn.classList.remove("hide");
-
-        var el = document.getElementById("frames").children;
-        for (var i = 0; i < el.length; i++) {
-            var e = el[i];
-            var a = find_child(e, "rect").attributes;
-            var ex = parseFloat(a.x.value);
-            var ew = parseFloat(a.width.value);
-            var depth = parseInt(e.getAttribute("data-depth"));
-            var elNode = e.getAttribute("data-node");
-
-            if (ex < xmin || ex + fudge >= xmax) {
-                e.classList.add("hide");
-            } else {
-                zoom_child(e, xmin, ratio);
-                update_text(e);
-            }
-        }
-        search();
-    }
-
-    function unzoom(dont_update_text) {
-        unzoombtn.classList.add("hide");
-        var el = document.getElementById("frames").children;
-        for(var i = 0; i < el.length; i++) {
-            el[i].classList.remove("parent");
-            el[i].classList.remove("hide");
-            zoom_reset(el[i]);
-            if(!dont_update_text) update_text(el[i]);
-        }
-        search();
-    }
-
-    function clearzoom() {
-        unzoom();
-        var params = get_params();
-        if (params.x) delete params.x;
-        if (params.y) delete params.y;
-        history.replaceState(null, null, parse_params(params));
-    }
-
+    // ========== 搜索功能 ==========
     function toggle_ignorecase() {
         ignorecase = !ignorecase;
         if (ignorecase) {
