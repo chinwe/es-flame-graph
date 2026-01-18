@@ -291,7 +291,22 @@
         if (!t || !r) return;
 
         var w = parseFloat(r.getAttribute("width")) - 3;
-        var txt = g_to_text(e).replace(/\([^(]*\)$/, "");
+
+        // Try to get simplified name from comment
+        var simplifiedName = null;
+        var children = e.childNodes;
+        for (var i = 0; i < children.length; i++) {
+            if (children[i].nodeType === 8) { // Comment node
+                var commentContent = children[i].nodeValue;
+                if (commentContent.indexOf("simplified-name:") === 0) {
+                    simplifiedName = commentContent.substring("simplified-name:".length);
+                    break;
+                }
+            }
+        }
+
+        // Use simplified name if available, otherwise use title text
+        var txt = simplifiedName || g_to_text(e).replace(/\([^(]*\)$/, "");
         t.setAttribute("x", parseFloat(r.getAttribute("x")) + 3);
 
         if (w < 2 * 12 * 0.59) {

@@ -501,8 +501,14 @@ class FlameGraphGenerator:
             pct = f"{frame.percentage:.2f}"
             escaped_name = self._escape_xml(frame.name)
 
+            # Store simplified name for JavaScript interactions
+            simplified_name = frame.name
+            if frame.depth == 2:
+                simplified_name = self._simplify_thread_name(frame.name)
+
             info = f"{escaped_name} ({samples_str} {self.countname}, {pct}%)"
             svg_lines.append(f"    <title>{info}</title>")
+            svg_lines.append(f'    <!--simplified-name:{self._escape_xml(simplified_name)}-->')
 
             svg_lines.append(
                 f'    <rect x="{frame.x:.1f}" y="{y:.1f}" '
