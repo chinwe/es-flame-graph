@@ -52,14 +52,9 @@ curl -s http://localhost:9200/_nodes/hot_threads > hot_threads.txt
 # Tasks API
 curl -s http://localhost:9200/_tasks > tasks.json
 
-# 混合数据（自动识别）
-cat > example.txt << EOF
-::: {node_id}...
-Hot threads at ...
-
-tasks:marker
-{"nodes": {...}}
-EOF
+# 混合数据（自动识别，无需标记）
+# 直接拼接两种数据即可
+cat hot_threads.txt tasks.json > example.txt
 ```
 
 ## 输入格式

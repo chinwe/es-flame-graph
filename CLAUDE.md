@@ -47,14 +47,9 @@ curl -s http://localhost:9200/_nodes/hot_threads?threads=5 -H "Content-Type: app
 # 从 Elasticsearch 获取 Tasks 数据
 curl -s http://localhost:9200/_tasks > tasks.json
 
-# 混合数据（包含 Hot Threads 和 Tasks）
-cat > example.txt << EOF
-# Hot Threads 数据...
-::: {node_id}...
-
-tasks:marker
-{"nodes": {...}}
-EOF
+# 混合数据（自动识别，无需特殊标记）
+# 直接拼接两种数据即可
+cat hot_threads.txt tasks.json > example.txt
 ```
 
 ## 架构说明
@@ -75,7 +70,8 @@ EOF
 
 3. **`es_flame_graph/mixed_parser.py`** - 混合数据解析器
    - `MixedParser`: 自动识别并分离混合的 Hot Threads 和 Tasks 数据
-   - 识别 `tasks:` 标记分隔两种数据
+   - 自动检测 Hot Threads（以 `:::` 开头）和 Tasks JSON（以 `{` 开头）
+   - 无需特殊标记，直接拼接即可
    - 分别生成两个火焰图文件
 
 4. **`es_flame_graph/flamegraph.py`** - SVG 生成器
@@ -148,7 +144,7 @@ SVG 输出
     ↓
 MixedParser.parse_text()
     ↓
-识别 tasks: 标记
+自动检测 Hot Threads (:::) 和 Tasks JSON ({)
     ↓
 分离为 Hot Threads 和 Tasks 两部分
     ↓
