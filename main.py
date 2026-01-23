@@ -2,29 +2,101 @@
 Elasticsearch Hot Threads Flame Graph Generator - CLI
 
 Command-line interface for generating flame graphs from Hot Threads data.
+Now supports both Hot Threads and Tasks API formats.
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
-from es_flame_graph import HotThreadsParser, FlameGraphGenerator
+from es_flame_graph import HotThreadsParser, TasksParser, FlameGraphGenerator
+
+
+def detect_input_format(text: str) -> str:
+    """
+    Auto-detect input format: 'hot_threads' or 'tasks'
+
+    Args:
+        text: Input text content
+
+    Returns:
+        'hot_threads' or 'tasks'
+    """
+    text_stripped = text.strip()
+
+    # Check for JSON (tasks API) - supports both single and multiple JSON objects
+    if text_stripped.startswith("{"):
+        try:
+            data = json.loads(text_stripped)
+            # Single JSON object - check for tasks API structure
+            if "nodes" in data and isinstance(data.get("nodes"), dict):
+                # Further validate: check for tasks field
+                for node_data in data["nodes"].values():
+                    if isinstance(node_data, dict) and "tasks" in node_data:
+                        return "tasks"
+        except json.JSONDecodeError:
+            # Not a single JSON - might be multiple concatenated JSON objects
+            # Try to parse using TasksParser's multiple JSON handler
+            from es_flame_graph.tasks_parser import TasksParser
+            parser = TasksParser()
+            try:
+                data_list = parser._parse_multiple_json(text_stripped)
+                if data_list:
+                    # Check if any of the parsed objects are tasks API responses
+                    for data in data_list:
+                        if "nodes" in data and isinstance(data.get("nodes"), dict):
+                            for node_data in data["nodes"].values():
+                                if isinstance(node_data, dict) and "tasks" in node_data:
+                                    return "tasks"
+            except Exception:
+                pass
+
+    # Check for Hot Threads patterns
+    if "::: {" in text or "Hot threads at" in text:
+        return "hot_threads"
+
+    # Default to hot_threads
+    return "hot_threads"
+
+
+def format_time_nanos(nanos: float) -> str:
+    """
+    Format time in nanoseconds to the most appropriate unit
+
+    Args:
+        nanos: Time in nanoseconds
+
+    Returns:
+        Formatted time string
+    """
+    if nanos >= 1_000_000_000:
+        return f"{nanos / 1_000_000_000:.2f}s"
+    elif nanos >= 1_000_000:
+        return f"{nanos / 1_000_000:.2f}ms"
+    elif nanos >= 1_000:
+        return f"{nanos / 1_000:.2f}μs"
+    else:
+        return f"{nanos:.0f}ns"
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Elasticsearch Hot Threads Flame Graph Generator",
+        description="Elasticsearch Hot Threads Flame Graph Generator (supports Hot Threads & Tasks API)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Hot Threads
   %(prog)s -i hot_threads.txt -o flamegraph.svg
   %(prog)s -i hot_threads.txt --title "Production Cluster"
-  %(prog)s -i hot_threads.txt --width 1600 --minwidth 0.5%%
+
+  # Tasks API
+  %(prog)s -i tasks.json -o tasks.svg
         """,
     )
 
     parser.add_argument(
-        "-i", "--input", required=True, help="Input file path (Hot Threads text output)"
+        "-i", "--input", required=True, help="Input file path (Hot Threads text or Tasks API JSON)"
     )
 
     parser.add_argument(
@@ -36,8 +108,8 @@ Examples:
 
     parser.add_argument(
         "--title",
-        default="Elasticsearch Hot Threads",
-        help="Graph title (default: 'Elasticsearch Hot Threads')",
+        default=None,  # None means auto-detect
+        help="Graph title (default: auto-detected from input type)",
     )
 
     parser.add_argument(
@@ -81,34 +153,34 @@ Examples:
         "--sort-by-cpu",
         action="store_true",
         default=True,
-        help="Sort threads by CPU usage (highest first) (default: enabled)",
+        help="Sort threads/actions by value (highest first) (default: enabled)",
     )
 
     parser.add_argument(
         "--no-sort-by-cpu",
         action="store_false",
         dest="sort_by_cpu",
-        help="Disable CPU-based sorting",
+        help="Disable value-based sorting",
     )
 
     parser.add_argument(
         "--show-cpu-percent",
         action="store_true",
         default=True,
-        help="Show CPU percentage in flame graph labels (default: enabled)",
+        help="Show percentage in flame graph labels (default: enabled)",
     )
 
     parser.add_argument(
         "--no-show-cpu-percent",
         action="store_false",
         dest="show_cpu_percent",
-        help="Disable CPU percentage display in labels",
+        help="Disable percentage display in labels",
     )
 
     parser.add_argument(
         "--per-node",
         action="store_true",
-        help="Generate separate flame graph for each node",
+        help="[Hot Threads only] Generate separate flame graph for each node",
     )
 
     args = parser.parse_args()
@@ -125,22 +197,47 @@ Examples:
         print(f"Error reading input file: {e}", file=sys.stderr)
         sys.exit(1)
 
-    parser = HotThreadsParser()
+    # Detect input format
+    input_format = detect_input_format(text)
+    is_tasks = input_format == "tasks"
+
+    # Parse based on format
+    if is_tasks:
+        parser = TasksParser()
+    else:
+        parser = HotThreadsParser()
+
     try:
         data = parser.parse_text(text)
     except Exception as e:
-        print(f"Error parsing Hot Threads data: {e}", file=sys.stderr)
+        print(f"Error parsing {input_format} data: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
     if not data.threads:
-        print("Warning: No hot threads found in input data", file=sys.stderr)
+        print("Warning: No data found in input", file=sys.stderr)
         sys.exit(0)
 
-    from collections import defaultdict
+    # Determine title
+    if args.title:
+        title = args.title
+    elif is_tasks:
+        title = "Elasticsearch Tasks"
+    else:
+        title = "Elasticsearch Hot Threads"
+
+    # --per-node is not supported for Tasks API
+    if is_tasks and args.per_node:
+        print("Warning: --per-node is not supported for Tasks API, ignoring...", file=sys.stderr)
+        args.per_node = False
 
     output_path = Path(args.output)
 
     if args.per_node:
+        # Per-node mode (Hot Threads only)
+        from collections import defaultdict
+
         threads_by_node = defaultdict(list)
         for thread in data.threads:
             key = f"{thread.node_id}_{thread.node_name}"
@@ -177,14 +274,14 @@ Examples:
                 width=args.width,
                 height=args.height,
                 minwidth=args.minwidth,
-                title=f"{args.title} - {node_name}",
+                title=f"{title} - {node_name}",
                 color_theme=args.color,
                 sort_by_cpu=args.sort_by_cpu,
                 show_cpu_percent=args.show_cpu_percent,
             )
 
             try:
-                svg = generator.generate(node_data)
+                svg = generator.generate(node_data, is_tasks=False)
             except Exception as e:
                 print(
                     f"Error generating flame graph for {node_name}: {e}",
@@ -200,20 +297,23 @@ Examples:
                 print(f"Error writing {svg_filename}: {e}", file=sys.stderr)
 
     else:
+        # Single graph mode
         generator = FlameGraphGenerator(
             width=args.width,
             height=args.height,
             minwidth=args.minwidth,
-            title=args.title,
+            title=title,
             color_theme=args.color,
             sort_by_cpu=args.sort_by_cpu,
             show_cpu_percent=args.show_cpu_percent,
         )
 
         try:
-            svg = generator.generate(data)
+            svg = generator.generate(data, is_tasks=is_tasks)
         except Exception as e:
             print(f"Error generating flame graph: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
             sys.exit(1)
 
         try:
@@ -223,10 +323,19 @@ Examples:
             print(f"Error writing output file: {e}", file=sys.stderr)
             sys.exit(1)
 
+        # Print summary
         print(f"[OK] Flame graph generated: {args.output}")
+        print(f"  Input format: {input_format}")
         print(f"  Nodes: {data.node_count}")
-        print(f"  Threads: {len(data.threads)}")
-        print(f"  Total CPU time: {data.total_cpu_time:.2f}ms")
+        if is_tasks:
+            # For Tasks API, show total running time
+            total_nanos = data.total_cpu_time * 1_000_000
+            print(f"  Actions: {len(data.threads)}")
+            print(f"  Total running time: {format_time_nanos(total_nanos)}")
+        else:
+            # For Hot Threads, show CPU time
+            print(f"  Threads: {len(data.threads)}")
+            print(f"  Total CPU time: {data.total_cpu_time:.2f}ms")
 
 
 if __name__ == "__main__":

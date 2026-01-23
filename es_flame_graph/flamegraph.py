@@ -28,6 +28,7 @@ class FrameNode:
     color: str = "rgb(255,255,255)"
     start_time: float = 0.0
     end_time: float = 0.0
+    description: str = ""  # 新增：用于 Tasks API 的 description
     parent: Optional["FrameNode"] = None
     children: List["FrameNode"] = field(default_factory=list)
 
@@ -74,16 +75,18 @@ class FlameGraphGenerator:
             os.path.dirname(__file__), "..", "static", "interactions.js"
         )
 
-    def generate(self, data) -> str:
+    def generate(self, data, is_tasks: bool = False) -> str:
         """
         Generate flame graph SVG from ParsedData
 
         Args:
             data: ParsedData object
+            is_tasks: True if data is from Tasks API
 
         Returns:
             SVG string
         """
+        self.is_tasks = is_tasks  # 存储模式标志
         merged = self._merge_threads(data.threads)
         root = self._build_tree(merged, data.total_cpu_time)
         self._assign_colors(root)
@@ -115,10 +118,16 @@ class FlameGraphGenerator:
                 # Accumulate both CPU time and samples count
                 node_thread_groups[node_key][thread_name][0] += thread.cpu_time_ms
                 node_thread_groups[node_key][thread_name][1] += thread.samples_count
+                # Keep first description (for Tasks API)
+                if thread.stack_frames and not node_thread_groups[node_key][thread_name][2]:
+                    node_thread_groups[node_key][thread_name][2] = thread.stack_frames[0] if thread.stack_frames else ""
             else:
+                # Get description from stack_frames (for Tasks API)
+                description = thread.stack_frames[0] if thread.stack_frames else ""
                 node_thread_groups[node_key][thread_name] = [
                     thread.cpu_time_ms,
                     thread.samples_count,
+                    description,
                 ]
 
         # Calculate total CPU time for percentage
@@ -130,9 +139,9 @@ class FlameGraphGenerator:
             node_total = sum(v[0] for v in thread_dict.values())
             node_samples = sum(v[1] for v in thread_dict.values())
             thread_list = []
-            for thread_name, (cpu_time, samples_count) in thread_dict.items():
+            for thread_name, (cpu_time, samples_count, description) in thread_dict.items():
                 cpu_percent = (cpu_time / node_total * 100) if node_total > 0 else 0
-                thread_list.append((thread_name, cpu_time, cpu_percent, samples_count))
+                thread_list.append((thread_name, cpu_time, cpu_percent, samples_count, description))
 
             # Sort by CPU time if enabled
             if self.sort_by_cpu:
@@ -175,11 +184,15 @@ class FlameGraphGenerator:
             root.children.append(node_frame)
 
             # Create thread frames under each node
-            for thread_name, cpu_time, cpu_percent, samples_count in node_data[
+            for thread_name, cpu_time, cpu_percent, samples_count, description in node_data[
                 "threads"
             ]:
                 thread_frame = FrameNode(
-                    name=thread_name, depth=2, value=cpu_time, parent=node_frame
+                    name=thread_name,
+                    depth=2,
+                    value=cpu_time,
+                    parent=node_frame,
+                    description=description,  # 传递 description
                 )
                 thread_frame.cpu_percent = cpu_percent
                 thread_frame.samples_count = samples_count
@@ -291,24 +304,96 @@ class FlameGraphGenerator:
             current_x += node.width
             node.end_time = node.x + node.width
 
-        # Layout threads above nodes
-        current_x = self.xpad
+        # Layout threads as treemap: each node's threads form a square
+        # Each node gets its own square based on its thread count and total CPU
+        max_square_size = 0
+
+        # For Tasks mode, use smaller minimum square size for more compact layout
+        min_block_height = 40 if hasattr(self, 'is_tasks') and self.is_tasks else 80
+
         for node in root.children:
             if node.children:
-                thread_x = node.x
+                # Calculate block height: use node width for alignment, ensure minimum for visibility
+                # Use node.width directly to ensure alignment with node below
+                block_width = node.width
+                block_height = max(node.width, min_block_height)
+                # Cap maximum height to avoid overly tall blocks
+                block_height = min(block_height, 200)
+                max_square_size = max(max_square_size, block_height)
+
+                # Sort threads by CPU descending (largest first)
+                node.children.sort(key=lambda t: t.value, reverse=True)
+
+                # Layout threads horizontally, aligned with node width
+                current_x = node.x
                 for thread in node.children:
-                    thread.x = thread_x
-                    # Thread width is proportional to its CPU time within the node
                     if node.value > 0:
-                        thread.width = (thread.value / node.value) * node.width
+                        thread_width = (thread.value / node.value) * block_width
                     else:
-                        thread.width = 0
+                        thread_width = 0
+                    thread.x = current_x
                     thread.y = self.ypad1
-                    thread_x += thread.width
+                    thread.width = thread_width
+                    # Store height for rendering (all threads have same height in block)
+                    thread._treemap_height = block_height
+                    current_x += thread_width
 
-            current_x += node.width
+        # Position nodes below their treemap squares
+        for node in root.children:
+            node.y = self.ypad1 + max_square_size + (self.height + self.framepad)
 
-        self.current_y = self.ypad1 + 2 * (self.height + self.framepad)
+        self.current_y = node.y + 2 * (self.height + self.framepad)
+
+    def _layout_treemap(self, threads: List[FrameNode], x: float, y: float, width: float, height: float, total_value: float):
+        """
+        Layout threads in a treemap (squarified) style.
+
+        Args:
+            threads: List of threads to layout
+            x: Starting x position
+            y: Starting y position
+            width: Available width
+            height: Available height
+            total_value: Total value for percentage calculation
+        """
+        if not threads or width <= 0 or height <= 0:
+            return
+
+        if len(threads) == 1:
+            # Single thread: fill the entire area
+            threads[0].x = x
+            threads[0].y = y
+            threads[0].width = width
+            return
+
+        # Calculate aspect ratios to decide split direction
+        # Split horizontally if width > height, else vertically
+        if width >= height:
+            # Horizontal split: divide width proportionally
+            current_x = x
+            for thread in threads:
+                if total_value > 0:
+                    thread_width = (thread.value / total_value) * width
+                else:
+                    thread_width = 0
+                thread.x = current_x
+                thread.y = y
+                thread.width = thread_width
+                current_x += thread_width
+        else:
+            # Vertical split: divide height proportionally
+            current_y = y
+            for thread in threads:
+                if total_value > 0:
+                    thread_height = (thread.value / total_value) * height
+                else:
+                    thread_height = 0
+                thread.x = x
+                thread.y = current_y
+                thread.width = width
+                # Store height in a temporary attribute for rendering
+                thread._treemap_height = thread_height
+                current_y += thread_height
 
     def _calculate_time_ranges(self, node: FrameNode, current_time: float) -> float:
         """
@@ -506,13 +591,27 @@ class FlameGraphGenerator:
             if frame.depth == 2:
                 simplified_name = self._simplify_thread_name(frame.name)
 
-            info = f"{escaped_name} ({samples_str} {self.countname}, {pct}%)"
+            # Build tooltip info
+            if hasattr(self, 'is_tasks') and self.is_tasks and frame.depth == 2:
+                # Tasks mode: show formatted time and description
+                time_str = self._format_time_nanos(frame.value * 1_000_000)  # Convert ms back to nanos
+                info = f"{escaped_name} ({time_str}, {pct}%)"
+                if hasattr(frame, 'description') and frame.description:
+                    info += f"\n{self._escape_xml(frame.description)}"
+            else:
+                # Hot Threads mode: show samples
+                info = f"{escaped_name} ({samples_str} {self.countname}, {pct}%)"
             svg_lines.append(f"    <title>{info}</title>")
             svg_lines.append(f'    <!--simplified-name:{self._escape_xml(simplified_name)}-->')
 
+            # For treemap layout, use actual height for rendering
+            frame_height = self.height - self.framepad
+            if hasattr(frame, '_treemap_height'):
+                frame_height = frame._treemap_height - self.framepad
+
             svg_lines.append(
                 f'    <rect x="{frame.x:.1f}" y="{y:.1f}" '
-                f'width="{frame.width:.1f}" height="{self.height - self.framepad}" '
+                f'width="{frame.width:.1f}" height="{max(frame_height, 1):.1f}" '
                 f'fill="{frame.color}" rx="2" ry="2" />'
             )
 
@@ -592,6 +691,25 @@ class FlameGraphGenerator:
             # Return the matched [...] part and everything after
             return thread_name[match.start(1) :]
         return thread_name
+
+    def _format_time_nanos(self, nanos: float) -> str:
+        """
+        Format time in nanoseconds to the most appropriate unit
+
+        Args:
+            nanos: Time in nanoseconds
+
+        Returns:
+            Formatted time string (e.g., "1.50s", "150.00ms", "500.00μs", "500ns")
+        """
+        if nanos >= 1_000_000_000:
+            return f"{nanos / 1_000_000_000:.2f}s"
+        elif nanos >= 1_000_000:
+            return f"{nanos / 1_000_000:.2f}ms"
+        elif nanos >= 1_000:
+            return f"{nanos / 1_000:.2f}μs"
+        else:
+            return f"{nanos:.0f}ns"
 
     def _get_javascript(self) -> str:
         """
