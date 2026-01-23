@@ -19,7 +19,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-org/es-flame-graph.git
+git clone https://github.com/chinwe/es-flame-graph.git
 cd es-flame-graph
 
 # 无需外部依赖（使用 Python 标准库）
@@ -30,32 +30,7 @@ cd es-flame-graph
 ### 基本用法
 
 ```bash
-python main.py -i hot_threads.txt -o flamegraph.svg
-```
-
-### 高级选项
-
-```bash
-# 自定义标题
-python main.py -i hot_threads.txt -o flamegraph.svg --title "生产集群 A"
-
-# 自定义宽度
-python main.py -i hot_threads.txt -o flamegraph.svg --width 1920
-
-# 设置最小帧宽度（像素或百分比）
-python main.py -i hot_threads.txt -o flamegraph.svg --minwidth 0.5%
-
-# 更改颜色主题
-python main.py -i hot_threads.txt -o flamegraph.svg --color java
-
-# 按 CPU 排序
-python main.py -i hot_threads.txt -o flamegraph.svg --sort-by-cpu
-
-# 显示 CPU 百分比
-python main.py -i hot_threads.txt -o flamegraph.svg --show-cpu-percent
-
-# 使用 CPU 颜色主题
-python main.py -i hot_threads.txt -o flamegraph.svg --color cpu --sort-by-cpu --show-cpu-percent
+python main.py -i examples/example.txt
 ```
 
 ### 命令行参数
