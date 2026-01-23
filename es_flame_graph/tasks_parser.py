@@ -19,6 +19,12 @@ class TaskInfo:
     description: str
     running_time_nanos: int
     task_id: str
+    parent_task_id: str = ""  # 父任务ID，用于层级聚合
+    children: List["TaskInfo"] = None  # 子任务列表
+
+    def __post_init__(self):
+        if self.children is None:
+            self.children = []
 
 
 class TasksParser:
@@ -68,8 +74,8 @@ class TasksParser:
                 if task_info:
                     all_tasks.append(task_info)
 
-        # Aggregate by node_id and action
-        aggregated = self._aggregate_tasks(all_tasks)
+        # Aggregate by hierarchy (parent-child relationship)
+        aggregated = self._aggregate_by_hierarchy(all_tasks)
 
         # Convert to ThreadInfo for FlameGraphGenerator compatibility
         threads = self._to_thread_info_list(aggregated)
@@ -184,6 +190,7 @@ class TasksParser:
         node_id = task.get("_node_id", task.get("node_id", "unknown"))
         node_name = task.get("_node_name", node_id)
         task_id = task.get("_task_id", task.get("task_id", "unknown"))
+        parent_task_id = task.get("parent_task_id", "")
 
         action = task.get("action", "unknown")
         description = task.get("description", "")
@@ -200,7 +207,135 @@ class TasksParser:
             description=description,
             running_time_nanos=running_time_nanos,
             task_id=task_id,
+            parent_task_id=parent_task_id,
         )
+
+    def _aggregate_by_hierarchy(self, tasks: List[TaskInfo]) -> Dict[str, Dict[str, Dict]]:
+        """
+        Aggregate tasks by hierarchy (parent-child relationship).
+
+        Child tasks' time is accumulated into parent tasks.
+        Child tasks are sorted by running_time_in_nanos (descending).
+        Child descriptions are formatted with time and sorted.
+
+        Args:
+            tasks: List of TaskInfo objects
+
+        Returns:
+            Dict: {
+                node_id: {
+                    action: {
+                        "total_time": float,
+                        "task_count": int,
+                        "description": str,
+                        "children": List[Dict]  # 子任务列表
+                    }
+                }
+            }
+        """
+        # Build task lookup and identify root tasks
+        task_map = {t.task_id: t for t in tasks}
+        root_task_ids = set()
+
+        # Identify root tasks (no parent or parent not in list)
+        for task in tasks:
+            if not task.parent_task_id or task.parent_task_id not in task_map:
+                root_task_ids.add(task.task_id)
+
+        # Accumulate all tasks into their root ancestors
+        result = {}
+
+        for root_id in root_task_ids:
+            # Find the actual root task object
+            root_task = task_map.get(root_id)
+            if not root_task:
+                continue
+
+            # Accumulate from this root and all its descendants
+            total_time, total_count, children_info = self._accumulate_task_time(
+                root_task, task_map
+            )
+
+            # Use root task's node_id and action
+            node_id = root_task.node_id
+            action = root_task.action
+
+            # Initialize
+            if node_id not in result:
+                result[node_id] = {}
+
+            if action not in result[node_id]:
+                result[node_id][action] = {
+                    "total_time": 0,
+                    "task_count": 0,
+                    "description": "",
+                    "children": [],
+                }
+
+            result[node_id][action]["total_time"] += total_time
+            result[node_id][action]["task_count"] += total_count
+            result[node_id][action]["children"].extend(children_info)
+
+        return result
+
+    def _accumulate_task_time(
+        self, task: TaskInfo, task_map: Dict[str, TaskInfo]
+    ) -> tuple:
+        """
+        Recursively accumulate time from task and all its descendants.
+
+        Args:
+            task: The task to accumulate
+            task_map: Map of all task_id -> TaskInfo
+
+        Returns:
+            Tuple of (total_time, total_count, children_info_list)
+            children_info_list: List of dicts with 'time', 'description', 'action' keys
+        """
+        total_time = task.running_time_nanos
+        total_count = 1  # Count this task
+        children_info = []
+
+        # Add current task as a child (for display in tooltip)
+        if task.description:
+            children_info.append({
+                "time": task.running_time_nanos,
+                "description": task.description,
+                "action": task.action,
+            })
+
+        # Find all direct children of this task
+        for child_task in task_map.values():
+            if child_task.parent_task_id == task.task_id:
+                # This is a direct child
+                child_time, child_count, child_children_info = self._accumulate_task_time(
+                    child_task, task_map
+                )
+                total_time += child_time
+                total_count += child_count
+                children_info.extend(child_children_info)
+
+        # Merge children with same action (ignoring [s][p][r] content) and description
+        merged_children = {}
+        for child in children_info:
+            # Normalize action by removing [s], [p], [r] patterns (index/type/request patterns)
+            normalized_action = self._normalize_action_for_merge(child["action"])
+            # Use (normalized_action, description) as merge key
+            key = (normalized_action, child["description"])
+            if key in merged_children:
+                # Accumulate time for same action and description
+                merged_children[key]["time"] += child["time"]
+            else:
+                # Store original action in the merged result
+                child_copy = child.copy()
+                child_copy["_normalized_action"] = normalized_action
+                merged_children[key] = child_copy
+
+        # Sort children by time descending
+        children_info = list(merged_children.values())
+        children_info.sort(key=lambda x: x["time"], reverse=True)
+
+        return total_time, total_count, children_info
 
     def _aggregate_tasks(self, tasks: List[TaskInfo]) -> Dict[str, Dict[str, Dict]]:
         """
@@ -249,7 +384,7 @@ class TasksParser:
         - action -> thread_name
         - running_time_nanos -> cpu_time_ms (converted)
         - task_count -> samples_count
-        - description -> stored in stack_frames for tooltip
+        - description -> formatted with total time and sorted children (newline separated)
         """
         from .parser import ThreadInfo
 
@@ -257,6 +392,31 @@ class TasksParser:
 
         for node_id, actions in aggregated.items():
             for action, data in actions.items():
+                # Format description with total time and sorted children
+                description_parts = []
+
+                # Add total time
+                total_time_nanos = data["total_time"]
+                total_time_str = self._format_time_nanos(total_time_nanos)
+                description_parts.append(f"Total: {total_time_str}")
+
+                # Add children sorted by time (descending)
+                children = data.get("children", [])
+                if children:
+                    description_parts.append("")  # Empty line separator
+                    for i, child in enumerate(children, 1):
+                        time_str = self._format_time_nanos(child["time"])
+                        child_action = child.get("action", "")
+                        child_desc = child.get("description", "")
+                        # Display normalized action (without [s][p][r] patterns)
+                        normalized_action = self._normalize_action_for_display(child_action)
+                        if child_desc:
+                            description_parts.append(f"{i}. {time_str}: {normalized_action} - {child_desc}")
+                        else:
+                            description_parts.append(f"{i}. {time_str}: {normalized_action}")
+
+                description = "\n".join(description_parts)
+
                 # Use first task's node_name if available
                 node_name = node_id
 
@@ -271,8 +431,63 @@ class TasksParser:
                     thread_name=action,  # Use action as thread_name
                     snapshots="",
                     samples_count=data["task_count"],
-                    stack_frames=[data["description"]] if data["description"] else [],
+                    stack_frames=[description],
                 )
                 threads.append(thread_info)
 
         return threads
+
+    def _format_time_nanos(self, nanos: float) -> str:
+        """
+        Format time in nanoseconds to the most appropriate unit
+
+        Args:
+            nanos: Time in nanoseconds
+
+        Returns:
+            Formatted time string (e.g., "1.50s", "150.00ms", "500.00μs", "500ns")
+        """
+        if nanos >= 1_000_000_000:
+            return f"{nanos / 1_000_000_000:.2f}s"
+        elif nanos >= 1_000_000:
+            return f"{nanos / 1_000_000:.2f}ms"
+        elif nanos >= 1_000:
+            return f"{nanos / 1_000:.2f}μs"
+        else:
+            return f"{nanos:.0f}ns"
+
+    def _normalize_action_for_merge(self, action: str) -> str:
+        """
+        Normalize action for merging by removing [s][p][r] patterns.
+
+        Elasticsearch actions may contain [s] (source), [p] (pool), [r] (request) suffixes.
+        These should be ignored when comparing actions for merging.
+
+        Examples:
+            indices:data/write/bulk[s][p] -> indices:data/write/bulk
+            indices:data/read/search[logs-2026] -> indices:data/read/search
+            cluster:monitor/nodes/liveness -> cluster:monitor/nodes/liveness
+
+        Args:
+            action: Original action string
+
+        Returns:
+            Normalized action without bracket patterns
+        """
+        import re
+        # Remove [...] patterns at the end of action (index names, [s], [p], [r] etc.)
+        return re.sub(r'\[.*?\]', '', action).rstrip()
+
+    def _normalize_action_for_display(self, action: str) -> str:
+        """
+        Normalize action for display by removing [s][p][r] patterns.
+
+        Same as _normalize_action_for_merge but used for display purposes.
+
+        Args:
+            action: Original action string
+
+        Returns:
+            Normalized action without bracket patterns
+        """
+        return self._normalize_action_for_merge(action)
