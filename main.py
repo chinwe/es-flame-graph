@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-from es_flame_graph import HotThreadsParser, TasksParser, FlameGraphGenerator
+from es_flame_graph import HotThreadsParser, TasksParser, FlameGraphGenerator, MixedParser
 
 
 def detect_input_format(text: str) -> str:
@@ -102,8 +102,8 @@ Examples:
     parser.add_argument(
         "-o",
         "--output",
-        default="output.svg",
-        help="Output SVG file path (default: output.svg)",
+        default=".",
+        help="Output directory for SVG files (default: current directory)",
     )
 
     parser.add_argument(
@@ -183,6 +183,20 @@ Examples:
         help="[Hot Threads only] Generate separate flame graph for each node",
     )
 
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        default=True,
+        help="Auto-detect and separate mixed Hot Threads and Tasks API data, generate two flame graphs (default: enabled)",
+    )
+
+    parser.add_argument(
+        "--no-auto",
+        action="store_false",
+        dest="auto",
+        help="Disable auto-detection, use single input mode",
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -196,6 +210,46 @@ Examples:
     except Exception as e:
         print(f"Error reading input file: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # --auto mode: Handle mixed Hot Threads and Tasks API data
+    if args.auto:
+        print("[INFO] Auto-detecting mixed Hot Threads and Tasks API data...")
+        mixed_parser = MixedParser()
+        mixed_data = mixed_parser.parse_text(text)
+
+        # Prepare output directory and base filename
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use input filename (without extension) as base name
+        base_name = input_path.stem
+
+        generator_kwargs = {
+            "width": args.width,
+            "height": args.height,
+            "minwidth": args.minwidth,
+            "color_theme": args.color,
+            "sort_by_cpu": args.sort_by_cpu,
+            "show_cpu_percent": args.show_cpu_percent,
+        }
+
+        # Generate flame graphs
+        ht_output, tasks_output = mixed_parser.generate_flamegraphs(
+            mixed_data, str(output_dir / base_name), generator_kwargs
+        )
+
+        # Print summary
+        print("[OK] Mixed data processing complete:")
+        if ht_output:
+            print(f"  Hot Threads: {ht_output}")
+        if tasks_output:
+            print(f"  Tasks API: {tasks_output}")
+
+        if not ht_output and not tasks_output:
+            print("  Warning: No valid data found in input", file=sys.stderr)
+            sys.exit(1)
+
+        sys.exit(0)
 
     # Detect input format
     input_format = detect_input_format(text)

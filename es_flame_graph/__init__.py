@@ -12,6 +12,7 @@ from .parser import HotThreadsParser, ThreadInfo, ParsedData
 from .flamegraph import FlameGraphGenerator
 from .color import get_color
 from .tasks_parser import TasksParser
+from .mixed_parser import MixedParser, MixedData
 
 __all__ = [
     "HotThreadsParser",
@@ -20,4 +21,6 @@ __all__ = [
     "FlameGraphGenerator",
     "get_color",
     "TasksParser",
+    "MixedParser",
+    "MixedData",
 ]
