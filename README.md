@@ -8,27 +8,47 @@
 - **双模式支持** - 同时支持 Hot Threads 和 Tasks API 格式
 - **交互式火焰图** - 悬停提示、点击缩放、搜索功能
 - **多种颜色主题** - hot、java、mem、cpu 等 14 种主题
-- **零依赖** - 仅使用 Python 标准库
+- **Treemap 布局** - 节点和线程以块状方式排列，更清晰的数据可视化
+- **Python 包** - 可安装为命令行工具
 
 ## 安装
 
 ```bash
+# 克隆仓库
 git clone https://github.com/chinwe/es-flame-graph.git
 cd es-flame-graph
+
+# 安装依赖（包含 svgwrite）
+pip install -e .
+
+# 或者直接运行（仅需要 Python 3.7+）
+python main.py -i input.txt
 ```
 
 ## 使用方法
 
 ```bash
 # 默认模式：自动识别并生成两个火焰图
-python main.py -i examples/example.txt
+python main.py -i example.txt
 # 输出: example_hot_threads.svg, example_tasks.svg
 
 # 指定输出目录
-python main.py -i examples/example.txt -o output/
+python main.py -i example.txt -o output/
 
 # 单输入模式（禁用自动识别）
 python main.py -i hot_threads.txt --no-auto -o output.svg
+
+# 高级选项
+python main.py -i example.txt -o output/ \
+  --title "生产集群 A" \
+  --width 1920 \
+  --height 18 \
+  --minwidth 0.5% \
+  --color cpu \
+  --no-sort-by-cpu
+
+# 为每个节点生成单独的火焰图（仅 Hot Threads）
+python main.py -i hot_threads.txt --per-node -o output/
 ```
 
 ## 命令行参数
@@ -36,11 +56,18 @@ python main.py -i hot_threads.txt --no-auto -o output.svg
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `-i, --input` | 输入文件路径 | 必需 |
-| `-o, --output` | 输出目录 | `.` (当前目录) |
+| `-o, --output` | 输出目录或文件路径 | `.` (当前目录) |
 | `--auto` | 自动识别混合数据 | `True` |
 | `--no-auto` | 禁用自动识别 | - |
+| `--title` | 图表标题 | 自动检测 |
 | `--color` | 颜色主题 | `hot` |
-| `--width` | SVG 宽度 | `1920` |
+| `--width` | SVG 宽度（像素） | `1920` |
+| `--height` | 帧高度（像素） | `18` |
+| `--minwidth` | 最小帧宽度（像素或百分比） | `0.1` |
+| `--sort-by-cpu` | 按 CPU 时间排序 | `True` |
+| `--no-sort-by-cpu` | 禁用排序 | - |
+| `--show-cpu-percent` | 显示 CPU 百分比 | `True` |
+| `--no-show-cpu-percent` | 隐藏百分比 | - |
 | `--per-node` | 每节点单独生成（仅 Hot Threads） | - |
 
 ## 获取数据
@@ -111,7 +138,7 @@ all (根)
 ## 要求
 
 - Python 3.7+
-- 无外部依赖
+- `svgwrite>=1.4.3`
 
 ## 许可证
 

@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 这是一个 Elasticsearch Hot Threads 和 Tasks API 火焰图生成器，用于将 Elasticsearch Hot Threads API 和 Tasks API 的输出可视化为交互式 SVG 火焰图。工具遵循 Brendan Gregg 的火焰图标准。
 
+**版本**: 0.2.0
+
 ## 常用命令
 
 ### 安装依赖
@@ -29,10 +31,10 @@ python main.py -i hot_threads.txt --no-auto -o output.svg
 python main.py -i example.txt -o output/ \
   --title "生产集群 A" \
   --width 1920 \
+  --height 18 \
   --minwidth 0.5% \
   --color cpu \
-  --sort-by-cpu \
-  --show-cpu-percent
+  --no-sort-by-cpu
 
 # 为每个节点生成单独的火焰图（仅 Hot Threads）
 python main.py -i hot_threads.txt --per-node -o output/
@@ -92,9 +94,10 @@ cat hot_threads.txt tasks.json > example.txt
 6. **`main.py`** - 命令行入口
    - 默认启用 `--auto` 模式（自动识别混合数据）
    - 文件名自动生成（基于输入文件名）
-   - `-o/--output` 指定输出目录
+   - `-o/--output` 指定输出目录或文件路径
    - 支持单节点和多节点模式（`--per-node`）
    - 默认启用 CPU 排序和百分比显示
+   - 支持 `--height` 参数控制帧高度
 
 7. **`static/interactions.js`** - JavaScript 交互功能
    - 嵌入到 SVG 中的交互代码
@@ -156,21 +159,26 @@ MixedParser.parse_text()
 
 ### 火焰图层级结构
 
-#### Hot Threads 层级
+#### Hot Threads 层级（Treemap 布局）
 ```
 all (根节点)
-├── node_id (第一层：节点)
-│   ├── thread-1 (第二层：线程)
+├── node_id (第一层：节点，底部显示)
+│   ├── thread-1 (第二层：线程，以块状方式在节点上方排列)
 │   └── thread-2 (第二层：线程)
 └── another_node_id (第一层：节点)
     └── thread-3 (第二层：线程)
 ```
 
-#### Tasks API 层级
+**布局说明**：
+- 每个节点的线程形成一个矩形块（treemap）
+- 线程宽度按 CPU 时间比例分配
+- 节点标签显示在其块下方
+
+#### Tasks API 层级（Treemap 布局）
 ```
 all (根节点)
-├── node_id (第一层：节点)
-│   ├── action-1 (第二层：操作类型)
+├── node_id (第一层：节点，底部显示)
+│   ├── action-1 (第二层：操作类型，以块状方式排列)
 │   └── action-2 (第二层：操作类型)
 └── another_node_id (第一层：节点)
     └── action-3 (第二层：操作类型)
@@ -182,7 +190,11 @@ all (根节点)
 
 **任务层级聚合**：子任务的运行时间会累加到父任务，相同 action 的任务会被合并显示。
 
+**Treemap 布局**：每个节点的线程/任务形成一个矩形块，块内按值比例水平分配宽度。节点标签显示在块下方。
+
 **颜色哈希**：使用确定性哈希算法，相同函数名总是获得相同颜色。
+
+**CPU 颜色主题**：`cpu` 主题根据 CPU 使用率动态着色（红色=高，绿色=低）。
 
 ## 重要约定
 
@@ -191,6 +203,9 @@ all (根节点)
 - **最小宽度过滤**：使用 `--minwidth` 避免显示过窄的帧（支持像素或百分比）
 - **文件名生成**：默认基于输入文件名自动生成（`example.txt` → `example_hot_threads.svg`, `example_tasks.svg`）
 - **SVG 输出文件**：已被 `.gitignore` 忽略
+- **Treemap 布局**：Tasks API 模式使用更紧凑的布局（最小块高度 40px），Hot Threads 使用 80px
+- **线程名简化**：`elasticsearch[node_id]` 前缀会被自动移除，只保留后面的线程类型部分
+- **--per-node 限制**：仅支持 Hot Threads 模式，Tasks API 不支持
 
 ## 依赖
 
