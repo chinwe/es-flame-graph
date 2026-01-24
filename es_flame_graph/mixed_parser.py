@@ -46,6 +46,30 @@ class MixedParser:
         """
         lines = text.split("\n")
 
+        # Check if the file starts with JSON (pure Tasks API data)
+        first_non_empty_idx = -1
+        for i, line in enumerate(lines):
+            if line.strip():
+                first_non_empty_idx = i
+                break
+
+        is_pure_json = (
+            first_non_empty_idx >= 0
+            and lines[first_non_empty_idx].strip().startswith("{")
+        )
+
+        # If pure JSON, treat entire content as Tasks data
+        if is_pure_json:
+            # Verify it's actually Tasks API format by checking for "nodes" and "tasks"
+            text_stripped = text.strip()
+            if '"nodes"' in text_stripped and '"tasks"' in text_stripped:
+                return MixedData(
+                    hot_threads_text=None,
+                    tasks_text=text,
+                    hot_threads_count=0,
+                    tasks_count=1,
+                )
+
         # Step 1: Find the tasks marker line (e.g., "tasks:dffs")
         tasks_marker_idx = -1
         for i, line in enumerate(lines):
